@@ -7,13 +7,13 @@
 
 
 #define _DEF_FIRMWATRE_VERSION    "V240612R1"
-#define _DEF_BOARD_NAME           "USB-KBD-ESTIMATOR"
+#define _DEF_BOARD_NAME           "BARAM-KBD-TESTER"
 
 
 #define _USE_HW_MICROS
 
 #define _USE_HW_LED
-#define      HW_LED_MAX_CH          3
+#define      HW_LED_MAX_CH          1
 
 #define _USE_HW_UART
 #define      HW_UART_MAX_CH         2
@@ -22,7 +22,7 @@
 #define      HW_UART_CH_CLI         HW_UART_CH_SWD
 
 #define _USE_HW_BUTTON
-#define      HW_BUTTON_MAX_CH       2
+#define      HW_BUTTON_MAX_CH       3
 
 #define _USE_HW_CLI
 #define      HW_CLI_CMD_LIST_MAX    32
@@ -39,11 +39,36 @@
 #define      HW_LOG_BOOT_BUF_MAX    2048
 #define      HW_LOG_LIST_BUF_MAX    4096
 
+#define _USE_HW_GPIO
+#define      HW_GPIO_MAX_CH         GPIO_PIN_MAX
+
+#define _USE_HW_RTC
+#define      HW_RTC_BOOT_MODE       RTC_BKP_DR3
+#define      HW_RTC_RESET_BITS      RTC_BKP_DR4
+
+#define _USE_HW_RESET
+#define      HW_RESET_BOOT          1
+
+
+
 #define _USE_HW_USB
+
 
 //-- CLI
 //
 #define _USE_CLI_HW_BUTTON          1
 #define _USE_CLI_HW_KEYSCAN         1
+#define _USE_CLI_HW_GPIO            1
+#define _USE_CLI_HW_RESET           1
+
+
+typedef enum
+{
+  VBUS_EXT_EN,
+  VBUS_EXT_FAULT,
+
+  GPIO_PIN_MAX,  
+} GpioPinName_t;
+
 
 #endif

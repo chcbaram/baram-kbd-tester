@@ -6,7 +6,7 @@
   "configurations": [
     {
       "cwd": "${workspaceRoot}",
-      "executable": "./build/baram-45k-hs-fw.elf",
+      "executable": "./build/baram-kbd-tester.elf",
       "name": "Debug with OpenOCD",
       "request": "launch",
       "type": "cortex-debug",
@@ -26,7 +26,7 @@
     },
     {
       "cwd": "${workspaceRoot}",
-      "executable": "./build/baram-45k-hs-fw.elf",
+      "executable": "./build/baram-kbd-tester.elf",
       "name": "Debug with STLINK",
       "request": "launch",
       "type": "cortex-debug",

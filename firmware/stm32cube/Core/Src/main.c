@@ -20,9 +20,9 @@
 #include "main.h"
 #include "dcache.h"
 #include "gpdma.h"
+#include "i2c.h"
 #include "icache.h"
 #include "memorymap.h"
-#include "pssi.h"
 #include "spi.h"
 #include "usart.h"
 #include "usb_otg.h"
@@ -56,6 +56,7 @@
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+static void SystemPower_Config(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -88,6 +89,9 @@ int main(void)
   /* Configure the system clock */
   SystemClock_Config();
 
+  /* Configure the System Power */
+  SystemPower_Config();
+
   /* USER CODE BEGIN SysInit */
 
   /* USER CODE END SysInit */
@@ -96,11 +100,12 @@ int main(void)
   MX_GPIO_Init();
   MX_GPDMA1_Init();
   MX_ICACHE_Init();
-  MX_USB_OTG_HS_PCD_Init();
+  MX_USB_OTG_HS_HCD_Init();
   MX_DCACHE1_Init();
   MX_SPI1_Init();
   MX_USART1_UART_Init();
-  MX_PSSI_Init();
+  MX_I2C2_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -166,6 +171,21 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief Power Configuration
+  * @retval None
+  */
+static void SystemPower_Config(void)
+{
+
+  /*
+   * Disable the internal Pull-Up in Dead Battery pins of UCPD peripheral
+   */
+  HAL_PWREx_DisableUCPDDeadBattery();
+/* USER CODE BEGIN PWR */
+/* USER CODE END PWR */
 }
 
 /* USER CODE BEGIN 4 */

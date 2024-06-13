@@ -38,6 +38,9 @@ bool bspInit(void)
     Error_Handler();
   }
 
+
+  HAL_PWREx_DisableUCPDDeadBattery();
+
   return ret;
 }
 

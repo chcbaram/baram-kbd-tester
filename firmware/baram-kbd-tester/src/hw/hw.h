@@ -16,7 +16,9 @@ extern "C" {
 #include "micros.h"
 #include "button.h"
 #include "spi.h"
-
+#include "gpio.h"
+#include "rtc.h"
+#include "reset.h"
 
 bool hwInit(void);
 

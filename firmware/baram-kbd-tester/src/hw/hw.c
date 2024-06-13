@@ -34,6 +34,9 @@ bool hwInit(void)
   logPrintf("Booting..Clock\t\t: %d Mhz\r\n", (int)HAL_RCC_GetSysClockFreq()/1000000);
   logPrintf("\n");
 
+  rtcInit();
+  resetInit();
+  gpioInit();
   buttonInit();
 
   return true;

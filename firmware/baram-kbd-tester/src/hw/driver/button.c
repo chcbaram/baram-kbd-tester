@@ -22,7 +22,6 @@ typedef struct
   uint32_t      pin;
   uint32_t      pull;
   GPIO_PinState on_state;
-  IRQn_Type     irq_type;
 } button_pin_t;
 
 
@@ -34,8 +33,9 @@ static bool buttonGetPin(uint8_t ch);
 
 static const button_pin_t button_pin[BUTTON_MAX_CH] =
     {
-      {GPIOC, GPIO_PIN_6, GPIO_NOPULL, GPIO_PIN_SET, EXTI13_IRQn},  // 0. B1
-      {GPIOB, GPIO_PIN_7, GPIO_PULLUP, GPIO_PIN_SET, EXTI5_IRQn },  // 1. B2
+      {GPIOB, GPIO_PIN_12, GPIO_PULLUP, GPIO_PIN_RESET},  // 0. B1
+      {GPIOB, GPIO_PIN_13, GPIO_PULLUP, GPIO_PIN_RESET},  // 1. B2
+      {GPIOB, GPIO_PIN_15, GPIO_PULLUP, GPIO_PIN_RESET},  // 2. B3
     };
 
 
@@ -51,8 +51,7 @@ bool buttonInit(void)
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
 
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOF_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
 
   for (int i=0; i<BUTTON_MAX_CH; i++)
@@ -77,11 +76,6 @@ bool buttonInit(void)
 #endif
 
   return ret;
-}
-
-void buttonSetEventISR(void (*func)(void))
-{
-
 }
 
 bool buttonGetPin(uint8_t ch)

@@ -32,14 +32,6 @@ extern "C" {
 
 /* USER CODE END Includes */
 
-extern DMA_NodeTypeDef Node_GPDMA1_Channel2;
-
-extern DMA_QListTypeDef List_GPDMA1_Channel2;
-
-extern DMA_HandleTypeDef handle_GPDMA1_Channel2;
-
-extern DMA_QListTypeDef pQueueLinkList;
-
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
