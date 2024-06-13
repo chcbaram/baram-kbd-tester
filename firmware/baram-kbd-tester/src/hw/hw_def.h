@@ -67,7 +67,9 @@ typedef enum
 {
   VBUS_EXT_EN,
   VBUS_EXT_FAULT,
-
+  KEY_PRESS_P,
+  KEY_PRESS_A,
+  
   GPIO_PIN_MAX,  
 } GpioPinName_t;
 
