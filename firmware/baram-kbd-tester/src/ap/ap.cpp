@@ -22,6 +22,7 @@ void apMain(void)
     }
 
     cliMain();
+    usbhUpdate();
   }
 }
 

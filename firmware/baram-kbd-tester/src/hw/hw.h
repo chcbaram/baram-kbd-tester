@@ -19,6 +19,7 @@ extern "C" {
 #include "gpio.h"
 #include "rtc.h"
 #include "reset.h"
+#include "usbh.h"
 
 bool hwInit(void);
 

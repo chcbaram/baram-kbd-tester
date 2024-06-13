@@ -45,7 +45,7 @@ void MX_USB_OTG_HS_HCD_Init(void)
   hhcd_USB_OTG_HS.Init.phy_itface = USB_OTG_HS_EMBEDDED_PHY;
   hhcd_USB_OTG_HS.Init.Sof_enable = ENABLE;
   hhcd_USB_OTG_HS.Init.low_power_enable = DISABLE;
-  hhcd_USB_OTG_HS.Init.use_external_vbus = ENABLE;
+  hhcd_USB_OTG_HS.Init.use_external_vbus = DISABLE;
   if (HAL_HCD_Init(&hhcd_USB_OTG_HS) != HAL_OK)
   {
     Error_Handler();
@@ -118,6 +118,10 @@ void HAL_HCD_MspInit(HCD_HandleTypeDef* hcdHandle)
     /*Configuring the SYSCFG registers OTG_HS PHY*/
     /*OTG_HS PHY enable*/
       HAL_SYSCFG_EnableOTGPHY(SYSCFG_OTG_HS_PHY_ENABLE);
+
+    /* USB_OTG_HS interrupt Init */
+    HAL_NVIC_SetPriority(OTG_HS_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
   /* USER CODE BEGIN USB_OTG_HS_MspInit 1 */
 
   /* USER CODE END USB_OTG_HS_MspInit 1 */
@@ -143,6 +147,8 @@ void HAL_HCD_MspDeInit(HCD_HandleTypeDef* hcdHandle)
     */
     HAL_GPIO_DeInit(GPIOA, GPIO_PIN_8|GPIO_PIN_11|GPIO_PIN_12);
 
+    /* USB_OTG_HS interrupt Deinit */
+    HAL_NVIC_DisableIRQ(OTG_HS_IRQn);
   /* USER CODE BEGIN USB_OTG_HS_MspDeInit 1 */
 
   /* USER CODE END USB_OTG_HS_MspDeInit 1 */

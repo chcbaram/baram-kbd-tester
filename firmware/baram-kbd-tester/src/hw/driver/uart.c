@@ -173,6 +173,11 @@ bool uartOpen(uint8_t ch, uint32_t baud)
   return ret;
 }
 
+bool uartIsOpen(uint8_t ch)
+{
+  return uart_tbl[ch].is_open;
+}
+
 bool uartClose(uint8_t ch)
 {
   if (ch >= UART_MAX_CH) return false;

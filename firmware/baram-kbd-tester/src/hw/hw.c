@@ -39,5 +39,8 @@ bool hwInit(void)
   gpioInit();
   buttonInit();
 
+  usbhInit();
+  usbhBegin();
+
   return true;
 }

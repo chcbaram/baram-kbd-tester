@@ -1,5 +1,6 @@
 #include "bsp.h"
 #include "hw_def.h"
+#include "uart.h"
 
 
 static void SystemClock_Config(void);
@@ -22,6 +23,9 @@ bool bspInit(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  __HAL_RCC_SYSCFG_CLK_ENABLE();
+  
 
   if (HAL_ICACHE_Enable() != HAL_OK)
   {
@@ -71,6 +75,12 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  if (uartIsOpen(HW_LOG_CH))
+  {
+    logPrintf("Error_Handler()\n");
+    delay(100);
+  }
+
   __disable_irq();
   while (1)
   {
@@ -92,8 +102,10 @@ void SystemClock_Config(void)
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
+  RCC_OscInitStruct.LSIDiv = RCC_LSI_DIV1;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLMBOOST = RCC_PLLMBOOST_DIV1;

@@ -25,7 +25,7 @@ file(GLOB SRC_FILES CONFIGURE_DEPENDS
   src/bsp/*.c
   src/bsp/device/*.c
 
-  # src/lib/ST/STM32_USB_Device_Library/Core/Src/*.c
+  src/lib/ST/STM32_USB_Host_Library/Core/Src/*.c
 )
 
 # 하위폴더에 있는 파일까지 포함한다.
@@ -74,15 +74,13 @@ target_include_directories(${EXECUTABLE} PRIVATE
   src/hw/driver
   src/lib
 
-  src/hw/driver/usb
-  src/hw/driver/usb/usb_cdc
-  src/hw/driver/usb/usb_hid
-  src/hw/driver/usb/usb_cmp
+  src/hw/driver/usbh
+  src/hw/driver/usbh/usbh_hid
 
   src/lib/ST/CMSIS/Include
   src/lib/ST/CMSIS/Device/ST/STM32U5xx/Include
   src/lib/ST/STM32U5xx_HAL_Driver/Inc
-  src/lib/ST/STM32_USB_Device_Library/Core/Inc
+  src/lib/ST/STM32_USB_Host_Library/Core/Inc
 )
 
 target_compile_definitions(${EXECUTABLE} PRIVATE

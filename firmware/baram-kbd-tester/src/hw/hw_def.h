@@ -51,7 +51,8 @@
 
 
 
-#define _USE_HW_USB
+#define _USE_HW_USBH
+
 
 
 //-- CLI
