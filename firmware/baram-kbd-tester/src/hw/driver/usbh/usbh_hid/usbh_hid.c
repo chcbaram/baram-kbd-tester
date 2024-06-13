@@ -843,6 +843,8 @@ __weak void USBH_HID_EventCallback(USBH_HandleTypeDef *phost)
 {
   /* Prevent unused argument(s) compilation warning */
   UNUSED(phost);
+
+  logPrintf("USBH_HID_EventCallback() \n");
 }
 
 
