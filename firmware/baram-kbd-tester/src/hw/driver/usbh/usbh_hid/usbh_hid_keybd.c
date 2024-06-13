@@ -329,14 +329,14 @@ USBH_StatusTypeDef USBH_HID_KeybdInit(USBH_HandleTypeDef *phost)
   uint32_t x;
   HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *) phost->pActiveClass->pData;
 
-  keybd_info.lctrl = 0U;
+  keybd_info.lctrl  = 0U;
   keybd_info.lshift = 0U;
-  keybd_info.lalt = 0U;
-  keybd_info.lgui = 0U;
-  keybd_info.rctrl = 0U;
+  keybd_info.lalt   = 0U;
+  keybd_info.lgui   = 0U;
+  keybd_info.rctrl  = 0U;
   keybd_info.rshift = 0U;
-  keybd_info.ralt = 0U;
-  keybd_info.rgui = 0U;
+  keybd_info.ralt   = 0U;
+  keybd_info.rgui   = 0U;
 
   for (x = 0U; x < sizeof(keybd_report_data); x++)
   {

@@ -1,101 +1,9 @@
-/**
-  ******************************************************************************
-  * @file    usbh_hid.c
-  * @author  MCD Application Team
-  * @brief   This file is the HID Layer Handlers for USB Host HID class.
-  *
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2015 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  * @verbatim
-  *
-  *          ===================================================================
-  *                                HID Class  Description
-  *          ===================================================================
-  *           This module manages the HID class V1.11 following the "Device Class Definition
-  *           for Human Interface Devices (HID) Version 1.11 Jun 27, 2001".
-  *           This driver implements the following aspects of the specification:
-  *             - The Boot Interface Subclass
-  *             - The Mouse and Keyboard protocols
-  *
-  *  @endverbatim
-  *
-  ******************************************************************************
-  */
-
-/* BSPDependencies
-- "stm32xxxxx_{eval}{discovery}{nucleo_144}.c"
-- "stm32xxxxx_{eval}{discovery}_io.c"
-- "stm32xxxxx_{eval}{discovery}{adafruit}_lcd.c"
-- "stm32xxxxx_{eval}{discovery}_sdram.c"
-EndBSPDependencies */
-
-/* Includes ------------------------------------------------------------------*/
 #include "usbh_hid.h"
 #include "usbh_hid_parser.h"
 
 
-/** @addtogroup USBH_LIB
-  * @{
-  */
+#include "cli.h"
 
-/** @addtogroup USBH_CLASS
-  * @{
-  */
-
-/** @addtogroup USBH_HID_CLASS
-  * @{
-  */
-
-/** @defgroup USBH_HID_CORE
-  * @brief    This file includes HID Layer Handlers for USB Host HID class.
-  * @{
-  */
-
-/** @defgroup USBH_HID_CORE_Private_TypesDefinitions
-  * @{
-  */
-/**
-  * @}
-  */
-
-
-/** @defgroup USBH_HID_CORE_Private_Defines
-  * @{
-  */
-/**
-  * @}
-  */
-
-
-/** @defgroup USBH_HID_CORE_Private_Macros
-  * @{
-  */
-/**
-  * @}
-  */
-
-
-/** @defgroup USBH_HID_CORE_Private_Variables
-  * @{
-  */
-
-/**
-  * @}
-  */
-
-
-/** @defgroup USBH_HID_CORE_Private_FunctionPrototypes
-  * @{
-  */
 
 static USBH_StatusTypeDef USBH_HID_InterfaceInit(USBH_HandleTypeDef *phost);
 static USBH_StatusTypeDef USBH_HID_InterfaceDeInit(USBH_HandleTypeDef *phost);
@@ -106,6 +14,9 @@ static void USBH_HID_ParseHIDDesc(HID_DescTypeDef *desc, uint8_t *buf);
 
 extern USBH_StatusTypeDef USBH_HID_MouseInit(USBH_HandleTypeDef *phost);
 extern USBH_StatusTypeDef USBH_HID_KeybdInit(USBH_HandleTypeDef *phost);
+
+static void cliCmd(cli_args_t *args);
+
 
 USBH_ClassTypeDef  HID_Class =
 {
@@ -118,14 +29,10 @@ USBH_ClassTypeDef  HID_Class =
   USBH_HID_SOFProcess,
   NULL,
 };
-/**
-  * @}
-  */
 
 
-/** @defgroup USBH_HID_CORE_Private_Functions
-  * @{
-  */
+static USBH_HandleTypeDef *p_host = NULL;
+static HID_HandleTypeDef  *p_hid  = NULL;
 
 
 /**
@@ -189,6 +96,9 @@ static USBH_StatusTypeDef USBH_HID_InterfaceInit(USBH_HandleTypeDef *phost)
     return USBH_FAIL;
   }
 
+  p_host = phost;
+  p_hid  = HID_Handle;
+
   HID_Handle->state     = USBH_HID_INIT;
   HID_Handle->ctl_state = USBH_HID_REQ_INIT;
   HID_Handle->ep_addr   = phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[0].bEndpointAddress;
@@ -234,6 +144,15 @@ static USBH_StatusTypeDef USBH_HID_InterfaceInit(USBH_HandleTypeDef *phost)
 
       (void)USBH_LL_SetToggle(phost, HID_Handle->OutPipe, 0U);
     }
+  }
+
+  static bool is_first = true;
+  if (is_first)
+  {
+    is_first = false;
+
+    logPrintf("[OK] USBH Hid\n");
+    cliAdd("usbhid", cliCmd);
   }
 
   return USBH_OK;
@@ -925,25 +844,48 @@ __weak void USBH_HID_EventCallback(USBH_HandleTypeDef *phost)
   /* Prevent unused argument(s) compilation warning */
   UNUSED(phost);
 }
-/**
-  * @}
-  */
-
-/**
-  * @}
-  */
-
-/**
-  * @}
-  */
 
 
-/**
-  * @}
-  */
 
+#ifdef _USE_HW_CLI
+void cliCmd(cli_args_t *args)
+{
+  bool ret = false;
 
-/**
-  * @}
-  */
+  if (args->argc == 1 && args->isStr(0, "info") == true)
+  {
+    cliPrintf("state          : %d\n", p_hid->state);
+    cliPrintf("ctl_state      : %d\n", p_hid->ctl_state);
+    cliPrintf("ep_addr        : 0x%02X\n", p_hid->ep_addr);
+    cliPrintf("wMaxPacketSize : %d\n", p_hid->length);
+    cliPrintf("poll           : %d\n", p_hid->poll);
+    ret = true;
+  }
 
+  if (args->argc == 1 && args->isStr(0, "log") == true)
+  {
+    uint32_t pre_time;
+    uint32_t pre_cnt;
+
+    pre_cnt = p_host->Timer;
+    pre_time = millis();
+    while(cliKeepLoop())
+    {
+      if (millis()-pre_time >= 1000)
+      {
+        pre_time = millis();
+        cliPrintf("sof cnt : %d/sec\n", p_host->Timer - pre_cnt);
+
+        pre_cnt = p_host->Timer;
+      }
+    }
+    ret = true;
+  }
+
+  if (ret == false)
+  {
+    cliPrintf("usbhid info\n");
+    cliPrintf("usbhid log\n");
+  }
+}
+#endif
