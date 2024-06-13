@@ -853,7 +853,8 @@ void cliCmd(cli_args_t *args)
   bool ret = false;
 
   if (args->argc == 1 && args->isStr(0, "info") == true)
-  {
+  { 
+    cliPrintf("speed          : %d\n", p_host->device.speed);
     cliPrintf("state          : %d\n", p_hid->state);
     cliPrintf("ctl_state      : %d\n", p_hid->ctl_state);
     cliPrintf("ep_addr        : 0x%02X\n", p_hid->ep_addr);
