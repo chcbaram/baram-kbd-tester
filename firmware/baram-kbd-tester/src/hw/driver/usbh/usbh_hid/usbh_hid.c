@@ -834,6 +834,9 @@ uint16_t USBH_HID_FifoWrite(FIFO_TypeDef *f, void *buf, uint16_t  nbytes)
   return nbytes;
 }
 
+extern uint32_t key_pre_time;
+extern uint32_t key_exe_time;
+
 /**
   * @brief  The function is a callback about HID Data events
   *  @param  phost: Selected device
@@ -844,7 +847,11 @@ __weak void USBH_HID_EventCallback(USBH_HandleTypeDef *phost)
   /* Prevent unused argument(s) compilation warning */
   UNUSED(phost);
 
-  logPrintf("USBH_HID_EventCallback() \n");
+  key_exe_time = micros() - key_pre_time;
+
+  // logPrintf("key time   : %d us, %d.%d ms\n", key_exe_time, key_exe_time/1000, key_exe_time%1000);
+
+  // logPrintf("USBH_HID_EventCallback() \n");
 }
 
 
