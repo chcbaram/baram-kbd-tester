@@ -10,8 +10,8 @@ extern "C" {
 
 #ifdef _USE_HW_USBH
 
-#include "usbh_core.h"
 
+#include "tusb.h"
 #include "usbh_hid.h"
 
 

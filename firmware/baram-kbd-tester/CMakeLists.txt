@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.13)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools")
 include(arm-none-eabi-gcc)
+include("src/lib/tinyusb/src/CMakeLists.txt")
 
 
 # 프로젝트 이름은 최종 출력 파일 이름으로 사용된다.
@@ -25,7 +26,10 @@ file(GLOB SRC_FILES CONFIGURE_DEPENDS
   src/bsp/*.c
   src/bsp/device/*.c
 
-  src/lib/ST/STM32_USB_Host_Library/Core/Src/*.c
+  # TinyUSB
+  src/lib/tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c
+  src/lib/tinyusb/src/portable/synopsys/dwc2/hcd_dwc2.c
+  src/lib/tinyusb/src/portable/synopsys/dwc2/dwc2_common.c
 )
 
 # 하위폴더에 있는 파일까지 포함한다.
@@ -59,7 +63,7 @@ add_executable(${EXECUTABLE}
   ${SRC_FILES_RECURSE}
 )
 
-
+tinyusb_target_add(${EXECUTABLE})
 
 target_include_directories(${EXECUTABLE} PRIVATE 
   src  
@@ -101,10 +105,11 @@ target_compile_options(${EXECUTABLE} PRIVATE
   -Wmissing-field-initializers
   -Wuninitialized 
   # -Wenum-conversion
+  -u_printf_float
 
   -Wall
   -g3
-  -Og
+  -O2
   )
 
 target_link_options(${EXECUTABLE} PRIVATE
@@ -115,12 +120,13 @@ target_link_options(${EXECUTABLE} PRIVATE
   -mfpu=fpv4-sp-d16
   -mfloat-abi=hard
   -specs=nano.specs
+  -u_printf_float
   -lc
   -lm
   -lstdc++
   -lsupc++
   -fno-rtti
-  -lnosys
+  # -lnosys
   -Wl,-Map=${PRJ_NAME}.map,--cref
   -Wl,--gc-sections
   -Xlinker -print-memory-usage -Xlinker
@@ -129,6 +135,10 @@ target_link_options(${EXECUTABLE} PRIVATE
 set (CMAKE_C_FLAGS "-Wenum-conversion")
 set (CMAKE_CXX_FLAGS "-fno-rtti")
 
+message(${CMAKE_CXX_COMPILER_VERSION})
+if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 11)
+  string(APPEND CMAKE_EXE_LINKER_FLAGS "-Wl,--no-warn-rwx-segments")
+endif()
 
 add_custom_command(TARGET ${EXECUTABLE} 
   POST_BUILD

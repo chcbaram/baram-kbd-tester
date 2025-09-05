@@ -20,6 +20,8 @@ extern "C" {
 #include "rtc.h"
 #include "reset.h"
 #include "usbh.h"
+#include "i2c.h"
+#include "lcd.h"
 
 bool hwInit(void);
 

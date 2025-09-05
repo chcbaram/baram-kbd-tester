@@ -1,860 +1,420 @@
 #include "usbh_hid.h"
-#include "usbh_hid_parser.h"
 
-
+#include "tusb.h"
 #include "cli.h"
 
 
-static USBH_StatusTypeDef USBH_HID_InterfaceInit(USBH_HandleTypeDef *phost);
-static USBH_StatusTypeDef USBH_HID_InterfaceDeInit(USBH_HandleTypeDef *phost);
-static USBH_StatusTypeDef USBH_HID_ClassRequest(USBH_HandleTypeDef *phost);
-static USBH_StatusTypeDef USBH_HID_Process(USBH_HandleTypeDef *phost);
-static USBH_StatusTypeDef USBH_HID_SOFProcess(USBH_HandleTypeDef *phost);
-static void USBH_HID_ParseHIDDesc(HID_DescTypeDef *desc, uint8_t *buf);
+#define MAX_REPORT 4
+// English
+#define LANGUAGE_ID 0x0409
 
-extern USBH_StatusTypeDef USBH_HID_MouseInit(USBH_HandleTypeDef *phost);
-extern USBH_StatusTypeDef USBH_HID_KeybdInit(USBH_HandleTypeDef *phost);
 
+
+static uint8_t const keycode2ascii[128][2] = {HID_KEYCODE_TO_ASCII};
+
+// Each HID instance can has multiple reports
+static struct
+{
+  uint8_t               report_count;
+  tuh_hid_report_info_t report_info[MAX_REPORT];
+} hid_info[CFG_TUH_HID];
+
+CFG_TUH_MEM_SECTION struct {
+  TUH_EPBUF_TYPE_DEF(tusb_desc_device_t, device);
+  TUH_EPBUF_DEF(serial, 64*sizeof(uint16_t));
+  TUH_EPBUF_DEF(buf, 128*sizeof(uint16_t));
+} desc;
+
+static bool is_connected = false;
+static usbh_hid_info_t usbh_hid_info;
+static void (*report_func_cb)(hid_keyboard_report_t const *) = NULL;
+
+static void process_kbd_report(hid_keyboard_report_t const *report);
+static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len);
+static void print_utf16(uint16_t* temp_buf, size_t buf_len);
 static void cliCmd(cli_args_t *args);
 
 
-USBH_ClassTypeDef  HID_Class =
+
+
+bool usbHidInit(void)
 {
-  "HID",
-  USB_HID_CLASS,
-  USBH_HID_InterfaceInit,
-  USBH_HID_InterfaceDeInit,
-  USBH_HID_ClassRequest,
-  USBH_HID_Process,
-  USBH_HID_SOFProcess,
-  NULL,
-};
+  logPrintf("[OK] USBH Hid\n");
+  cliAdd("usbhid", cliCmd);
+  return true;
+}
 
-
-static USBH_HandleTypeDef *p_host = NULL;
-static HID_HandleTypeDef  *p_hid  = NULL;
-
-
-/**
-  * @brief  USBH_HID_InterfaceInit
-  *         The function init the HID class.
-  * @param  phost: Host handle
-  * @retval USBH Status
-  */
-static USBH_StatusTypeDef USBH_HID_InterfaceInit(USBH_HandleTypeDef *phost)
+bool usbhHidIsConnected(void)
 {
-  USBH_StatusTypeDef status;
-  HID_HandleTypeDef *HID_Handle;
-  uint16_t ep_mps;
-  uint8_t max_ep;
-  uint8_t num = 0U;
-  uint8_t interface;
+  return is_connected;
+}
 
-  interface = USBH_FindInterface(phost, phost->pActiveClass->ClassCode, HID_BOOT_CODE, 0xFFU);
+void usbhHidGetInfo(usbh_hid_info_t *info)
+{
+  *info = usbh_hid_info;
+}
 
-  if ((interface == 0xFFU) || (interface >= USBH_MAX_NUM_INTERFACES)) /* No Valid Interface */
+void usbhHidSetReportCB( void (*func)(hid_keyboard_report_t const *))
+{
+  report_func_cb = func;
+}
+
+void tuh_mount_cb(uint8_t daddr)
+{
+  // Get Device Descriptor
+  uint8_t xfer_result = tuh_descriptor_get_device_sync(daddr, &desc.device, 18);
+  if (XFER_RESULT_SUCCESS != xfer_result)
   {
-    USBH_DbgLog("Cannot Find the interface for %s class.", phost->pActiveClass->Name);
-    return USBH_FAIL;
+    logPrintf("Failed to get device descriptor\r\n");
+    return;
   }
 
-  status = USBH_SelectInterface(phost, interface);
+  logPrintf("Device %u: ID %04x:%04x SN ", daddr, desc.device.idVendor, desc.device.idProduct);
 
-  if (status != USBH_OK)
+  xfer_result = XFER_RESULT_FAILED;
+  if (desc.device.iSerialNumber != 0)
   {
-    return USBH_FAIL;
+    xfer_result = tuh_descriptor_get_serial_string_sync(daddr, LANGUAGE_ID, desc.serial, sizeof(desc.serial));
   }
-
-  phost->pActiveClass->pData = (HID_HandleTypeDef *)USBH_malloc(sizeof(HID_HandleTypeDef));
-  HID_Handle = (HID_HandleTypeDef *) phost->pActiveClass->pData;
-
-  if (HID_Handle == NULL)
+  if (XFER_RESULT_SUCCESS != xfer_result)
   {
-    USBH_DbgLog("Cannot allocate memory for HID Handle");
-    return USBH_FAIL;
+    uint16_t *serial = (uint16_t *)(uintptr_t)desc.serial;
+    serial[0]        = (uint16_t)((TUSB_DESC_STRING << 8) | (2 * 3 + 2));
+    serial[1]        = 'n';
+    serial[2]        = '/';
+    serial[3]        = 'a';
+    serial[4]        = 0;
   }
+  print_utf16((uint16_t *)(uintptr_t)desc.serial, sizeof(desc.serial) / 2);
+  logPrintf("\r\n");
 
-  /* Initialize hid handler */
-  (void)USBH_memset(HID_Handle, 0, sizeof(HID_HandleTypeDef));
+  logPrintf("Device Descriptor:\r\n");
+  logPrintf("  bLength             %u\r\n", desc.device.bLength);
+  logPrintf("  bDescriptorType     %u\r\n", desc.device.bDescriptorType);
+  logPrintf("  bcdUSB              %04x\r\n", desc.device.bcdUSB);
+  logPrintf("  bDeviceClass        %u\r\n", desc.device.bDeviceClass);
+  logPrintf("  bDeviceSubClass     %u\r\n", desc.device.bDeviceSubClass);
+  logPrintf("  bDeviceProtocol     %u\r\n", desc.device.bDeviceProtocol);
+  logPrintf("  bMaxPacketSize0     %u\r\n", desc.device.bMaxPacketSize0);
+  logPrintf("  idVendor            0x%04x\r\n", desc.device.idVendor);
+  logPrintf("  idProduct           0x%04x\r\n", desc.device.idProduct);
+  logPrintf("  bcdDevice           %04x\r\n", desc.device.bcdDevice);
 
-  HID_Handle->state = USBH_HID_ERROR;
+  // Get String descriptor using Sync API
 
-  /*Decode Bootclass Protocol: Mouse or Keyboard*/
-  if (phost->device.CfgDesc.Itf_Desc[interface].bInterfaceProtocol == HID_KEYBRD_BOOT_CODE)
+  
+  usbh_hid_info.manufacturer[0] = 0;
+  logPrintf("  iManufacturer       %u     ", desc.device.iManufacturer);
+  if (desc.device.iManufacturer != 0)
   {
-    USBH_UsrLog("KeyBoard device found!");
-    HID_Handle->Init = USBH_HID_KeybdInit;
-  }
-  else if (phost->device.CfgDesc.Itf_Desc[interface].bInterfaceProtocol  == HID_MOUSE_BOOT_CODE)
-  {
-    USBH_UsrLog("Mouse device found!");
-    HID_Handle->Init = USBH_HID_MouseInit;
-  }
-  else
-  {
-    USBH_UsrLog("Protocol not supported.");
-    return USBH_FAIL;
-  }
-
-  p_host = phost;
-  p_hid  = HID_Handle;
-
-  HID_Handle->state     = USBH_HID_INIT;
-  HID_Handle->ctl_state = USBH_HID_REQ_INIT;
-  HID_Handle->ep_addr   = phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[0].bEndpointAddress;
-  HID_Handle->length    = phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[0].wMaxPacketSize;
-  HID_Handle->poll      = phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[0].bInterval;
-
-  if (HID_Handle->poll < HID_MIN_POLL)
-  {
-    HID_Handle->poll = HID_MIN_POLL;
-  }
-
-  /* Check of available number of endpoints */
-  /* Find the number of EPs in the Interface Descriptor */
-  /* Choose the lower number in order not to overrun the buffer allocated */
-  max_ep = ((phost->device.CfgDesc.Itf_Desc[interface].bNumEndpoints <= USBH_MAX_NUM_ENDPOINTS) ?
-            phost->device.CfgDesc.Itf_Desc[interface].bNumEndpoints : USBH_MAX_NUM_ENDPOINTS);
-
-
-  /* Decode endpoint IN and OUT address from interface descriptor */
-  for (num = 0U; num < max_ep; num++)
-  {
-    if ((phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[num].bEndpointAddress & 0x80U) != 0U)
+    xfer_result = tuh_descriptor_get_manufacturer_string_sync(daddr, LANGUAGE_ID, desc.buf, sizeof(desc.buf));
+    if (XFER_RESULT_SUCCESS == xfer_result)
     {
-      HID_Handle->InEp = (phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[num].bEndpointAddress);
-      HID_Handle->InPipe = USBH_AllocPipe(phost, HID_Handle->InEp);
-      ep_mps = phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[num].wMaxPacketSize;
+      print_utf16((uint16_t *)(uintptr_t)desc.buf, sizeof(desc.buf) / 2);
 
-      /* Open pipe for IN endpoint */
-      (void)USBH_OpenPipe(phost, HID_Handle->InPipe, HID_Handle->InEp, phost->device.address,
-                          phost->device.speed, USB_EP_TYPE_INTR, ep_mps);
+      strncpy(usbh_hid_info.manufacturer, (const char *)desc.buf, 256);
+    }
+  }
+  logPrintf("\r\n");
 
-      (void)USBH_LL_SetToggle(phost, HID_Handle->InPipe, 0U);
+  usbh_hid_info.product[0] = 0;
+  logPrintf("  iProduct            %u     ", desc.device.iProduct);
+  if (desc.device.iProduct != 0)
+  {
+    xfer_result = tuh_descriptor_get_product_string_sync(daddr, LANGUAGE_ID, desc.buf, sizeof(desc.buf));
+    if (XFER_RESULT_SUCCESS == xfer_result)
+    {
+      print_utf16((uint16_t *)(uintptr_t)desc.buf, sizeof(desc.buf) / 2);
+      strncpy(usbh_hid_info.product, (const char *)desc.buf, 256);
+    }
+  }
+  logPrintf("\r\n");
+
+  logPrintf("  iSerialNumber       %u     ", desc.device.iSerialNumber);
+  logPrintf((char *)desc.serial); // serial is already to UTF-8
+  logPrintf("\r\n");
+
+  logPrintf("  bNumConfigurations  %u\r\n", desc.device.bNumConfigurations);
+}
+
+// Invoked when device is unmounted (bus reset/unplugged)
+void tuh_umount_cb(uint8_t daddr)
+{
+  logPrintf("Device removed, address = %d\r\n", daddr);
+}
+
+//--------------------------------------------------------------------+
+// String Descriptor Helper
+//--------------------------------------------------------------------+
+
+static void _convert_utf16le_to_utf8(const uint16_t *utf16, size_t utf16_len, uint8_t *utf8, size_t utf8_len)
+{
+  // TODO: Check for runover.
+  (void)utf8_len;
+  // Get the UTF-16 length out of the data itself.
+
+  for (size_t i = 0; i < utf16_len; i++)
+  {
+    uint16_t chr = utf16[i];
+    if (chr < 0x80)
+    {
+      *utf8++ = chr & 0xffu;
+    }
+    else if (chr < 0x800)
+    {
+      *utf8++ = (uint8_t)(0xC0 | (chr >> 6 & 0x1F));
+      *utf8++ = (uint8_t)(0x80 | (chr >> 0 & 0x3F));
     }
     else
     {
-      HID_Handle->OutEp = (phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[num].bEndpointAddress);
-      HID_Handle->OutPipe = USBH_AllocPipe(phost, HID_Handle->OutEp);
-      ep_mps = phost->device.CfgDesc.Itf_Desc[interface].Ep_Desc[num].wMaxPacketSize;
-
-      /* Open pipe for OUT endpoint */
-      (void)USBH_OpenPipe(phost, HID_Handle->OutPipe, HID_Handle->OutEp, phost->device.address,
-                          phost->device.speed, USB_EP_TYPE_INTR, ep_mps);
-
-      (void)USBH_LL_SetToggle(phost, HID_Handle->OutPipe, 0U);
+      // TODO: Verify surrogate.
+      *utf8++ = (uint8_t)(0xE0 | (chr >> 12 & 0x0F));
+      *utf8++ = (uint8_t)(0x80 | (chr >> 6 & 0x3F));
+      *utf8++ = (uint8_t)(0x80 | (chr >> 0 & 0x3F));
     }
+    // TODO: Handle UTF-16 code points that take two entries.
   }
-
-  static bool is_first = true;
-  if (is_first)
-  {
-    is_first = false;
-
-    logPrintf("[OK] USBH Hid\n");
-    cliAdd("usbhid", cliCmd);
-  }
-
-  return USBH_OK;
 }
 
-/**
-  * @brief  USBH_HID_InterfaceDeInit
-  *         The function DeInit the Pipes used for the HID class.
-  * @param  phost: Host handle
-  * @retval USBH Status
-  */
-static USBH_StatusTypeDef USBH_HID_InterfaceDeInit(USBH_HandleTypeDef *phost)
+// Count how many bytes a utf-16-le encoded string will take in utf-8.
+static int _count_utf8_bytes(const uint16_t *buf, size_t len)
 {
-  HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *) phost->pActiveClass->pData;
-
-  if (HID_Handle->InPipe != 0x00U)
+  size_t total_bytes = 0;
+  for (size_t i = 0; i < len; i++)
   {
-    (void)USBH_ClosePipe(phost, HID_Handle->InPipe);
-    (void)USBH_FreePipe(phost, HID_Handle->InPipe);
-    HID_Handle->InPipe = 0U;     /* Reset the pipe as Free */
-  }
-
-  if (HID_Handle->OutPipe != 0x00U)
-  {
-    (void)USBH_ClosePipe(phost, HID_Handle->OutPipe);
-    (void)USBH_FreePipe(phost, HID_Handle->OutPipe);
-    HID_Handle->OutPipe = 0U;     /* Reset the pipe as Free */
-  }
-
-  if ((phost->pActiveClass->pData) != NULL)
-  {
-    USBH_free(phost->pActiveClass->pData);
-    phost->pActiveClass->pData = 0U;
-  }
-
-  return USBH_OK;
-}
-
-/**
-  * @brief  USBH_HID_ClassRequest
-  *         The function is responsible for handling Standard requests
-  *         for HID class.
-  * @param  phost: Host handle
-  * @retval USBH Status
-  */
-static USBH_StatusTypeDef USBH_HID_ClassRequest(USBH_HandleTypeDef *phost)
-{
-
-  USBH_StatusTypeDef status         = USBH_BUSY;
-  USBH_StatusTypeDef classReqStatus = USBH_BUSY;
-  HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *) phost->pActiveClass->pData;
-
-  /* Switch HID state machine */
-  switch (HID_Handle->ctl_state)
-  {
-    case USBH_HID_REQ_INIT:
-    case USBH_HID_REQ_GET_HID_DESC:
-
-      USBH_HID_ParseHIDDesc(&HID_Handle->HID_Desc, phost->device.CfgDesc_Raw);
-
-      HID_Handle->ctl_state = USBH_HID_REQ_GET_REPORT_DESC;
-
-      break;
-    case USBH_HID_REQ_GET_REPORT_DESC:
-
-      /* Get Report Desc */
-      classReqStatus = USBH_HID_GetHIDReportDescriptor(phost, HID_Handle->HID_Desc.wItemLength);
-      if (classReqStatus == USBH_OK)
-      {
-        /* The descriptor is available in phost->device.Data */
-        HID_Handle->ctl_state = USBH_HID_REQ_SET_IDLE;
-      }
-      else if (classReqStatus == USBH_NOT_SUPPORTED)
-      {
-        USBH_ErrLog("Control error: HID: Device Get Report Descriptor request failed");
-        status = USBH_FAIL;
-      }
-      else
-      {
-        /* .. */
-      }
-
-      break;
-
-    case USBH_HID_REQ_SET_IDLE:
-
-      classReqStatus = USBH_HID_SetIdle(phost, 0U, 0U);
-
-      /* set Idle */
-      if (classReqStatus == USBH_OK)
-      {
-        HID_Handle->ctl_state = USBH_HID_REQ_SET_PROTOCOL;
-      }
-      else
-      {
-        if (classReqStatus == USBH_NOT_SUPPORTED)
-        {
-          HID_Handle->ctl_state = USBH_HID_REQ_SET_PROTOCOL;
-        }
-      }
-      break;
-
-    case USBH_HID_REQ_SET_PROTOCOL:
-      /* set protocol */
-      classReqStatus = USBH_HID_SetProtocol(phost, 0U);
-      if (classReqStatus == USBH_OK)
-      {
-        HID_Handle->ctl_state = USBH_HID_REQ_IDLE;
-
-        /* all requests performed */
-        phost->pUser(phost, HOST_USER_CLASS_ACTIVE);
-        status = USBH_OK;
-      }
-      else if (classReqStatus == USBH_NOT_SUPPORTED)
-      {
-        USBH_ErrLog("Control error: HID: Device Set protocol request failed");
-        status = USBH_FAIL;
-      }
-      else
-      {
-        /* .. */
-      }
-      break;
-
-    case USBH_HID_REQ_IDLE:
-    default:
-      break;
-  }
-
-  return status;
-}
-
-/**
-  * @brief  USBH_HID_Process
-  *         The function is for managing state machine for HID data transfers
-  * @param  phost: Host handle
-  * @retval USBH Status
-  */
-static USBH_StatusTypeDef USBH_HID_Process(USBH_HandleTypeDef *phost)
-{
-  USBH_StatusTypeDef status = USBH_OK;
-  HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *) phost->pActiveClass->pData;
-  uint32_t XferSize;
-
-  switch (HID_Handle->state)
-  {
-    case USBH_HID_INIT:
-      status = HID_Handle->Init(phost);
-
-      if (status == USBH_OK)
-      {
-        HID_Handle->state = USBH_HID_IDLE;
-      }
-      else
-      {
-        USBH_ErrLog("HID Class Init failed");
-        HID_Handle->state = USBH_HID_ERROR;
-        status = USBH_FAIL;
-      }
-
-#if (USBH_USE_OS == 1U)
-      phost->os_msg = (uint32_t)USBH_URB_EVENT;
-#if (osCMSIS < 0x20000U)
-      (void)osMessagePut(phost->os_event, phost->os_msg, 0U);
-#else
-      (void)osMessageQueuePut(phost->os_event, &phost->os_msg, 0U, 0U);
-#endif
-#endif
-      break;
-
-    case USBH_HID_IDLE:
-      status = USBH_HID_GetReport(phost, 0x01U, 0U, HID_Handle->pData, (uint8_t)HID_Handle->length);
-
-      if (status == USBH_OK)
-      {
-        HID_Handle->state = USBH_HID_SYNC;
-      }
-      else if (status == USBH_BUSY)
-      {
-        HID_Handle->state = USBH_HID_IDLE;
-        status = USBH_OK;
-      }
-      else if (status == USBH_NOT_SUPPORTED)
-      {
-        HID_Handle->state = USBH_HID_SYNC;
-        status = USBH_OK;
-      }
-      else
-      {
-        HID_Handle->state = USBH_HID_ERROR;
-        status = USBH_FAIL;
-      }
-
-#if (USBH_USE_OS == 1U)
-      phost->os_msg = (uint32_t)USBH_URB_EVENT;
-#if (osCMSIS < 0x20000U)
-      (void)osMessagePut(phost->os_event, phost->os_msg, 0U);
-#else
-      (void)osMessageQueuePut(phost->os_event, &phost->os_msg, 0U, 0U);
-#endif
-#endif
-      break;
-
-    case USBH_HID_SYNC:
-      /* Sync with start of Even Frame */
-      if ((phost->Timer & 1U) != 0U)
-      {
-        HID_Handle->state = USBH_HID_GET_DATA;
-      }
-
-#if (USBH_USE_OS == 1U)
-      phost->os_msg = (uint32_t)USBH_URB_EVENT;
-#if (osCMSIS < 0x20000U)
-      (void)osMessagePut(phost->os_event, phost->os_msg, 0U);
-#else
-      (void)osMessageQueuePut(phost->os_event, &phost->os_msg, 0U, 0U);
-#endif
-#endif
-      break;
-
-    case USBH_HID_GET_DATA:
-      (void)USBH_InterruptReceiveData(phost, HID_Handle->pData,
-                                      (uint8_t)HID_Handle->length,
-                                      HID_Handle->InPipe);
-
-      HID_Handle->state = USBH_HID_POLL;
-      HID_Handle->timer = phost->Timer;
-      HID_Handle->DataReady = 0U;
-      break;
-
-    case USBH_HID_POLL:
-      if (USBH_LL_GetURBState(phost, HID_Handle->InPipe) == USBH_URB_DONE)
-      {
-        XferSize = USBH_LL_GetLastXferSize(phost, HID_Handle->InPipe);
-
-        if ((HID_Handle->DataReady == 0U) && (XferSize != 0U) && (HID_Handle->fifo.buf != NULL))
-        {
-          (void)USBH_HID_FifoWrite(&HID_Handle->fifo, HID_Handle->pData, HID_Handle->length);
-          HID_Handle->DataReady = 1U;
-          USBH_HID_EventCallback(phost);
-
-#if (USBH_USE_OS == 1U)
-          phost->os_msg = (uint32_t)USBH_URB_EVENT;
-#if (osCMSIS < 0x20000U)
-          (void)osMessagePut(phost->os_event, phost->os_msg, 0U);
-#else
-          (void)osMessageQueuePut(phost->os_event, &phost->os_msg, 0U, 0U);
-#endif
-#endif
-        }
-      }
-      else
-      {
-        /* IN Endpoint Stalled */
-        if (USBH_LL_GetURBState(phost, HID_Handle->InPipe) == USBH_URB_STALL)
-        {
-          /* Issue Clear Feature on interrupt IN endpoint */
-          if (USBH_ClrFeature(phost, HID_Handle->ep_addr) == USBH_OK)
-          {
-            /* Change state to issue next IN token */
-            HID_Handle->state = USBH_HID_GET_DATA;
-          }
-        }
-      }
-      break;
-
-    default:
-      break;
-  }
-
-  return status;
-}
-
-/**
-  * @brief  USBH_HID_SOFProcess
-  *         The function is for managing the SOF Process
-  * @param  phost: Host handle
-  * @retval USBH Status
-  */
-static USBH_StatusTypeDef USBH_HID_SOFProcess(USBH_HandleTypeDef *phost)
-{
-  HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *) phost->pActiveClass->pData;
-
-  if (HID_Handle->state == USBH_HID_POLL)
-  {
-    if ((phost->Timer - HID_Handle->timer) >= HID_Handle->poll)
+    uint16_t chr = buf[i];
+    if (chr < 0x80)
     {
-      HID_Handle->state = USBH_HID_GET_DATA;
+      total_bytes += 1;
+    }
+    else if (chr < 0x800)
+    {
+      total_bytes += 2;
+    }
+    else
+    {
+      total_bytes += 3;
+    }
+    // TODO: Handle UTF-16 code points that take two entries.
+  }
+  return (int)total_bytes;
+}
 
-#if (USBH_USE_OS == 1U)
-      phost->os_msg = (uint32_t)USBH_URB_EVENT;
-#if (osCMSIS < 0x20000U)
-      (void)osMessagePut(phost->os_event, phost->os_msg, 0U);
-#else
-      (void)osMessageQueuePut(phost->os_event, &phost->os_msg, 0U, 0U);
-#endif
-#endif
+static void print_utf16(uint16_t *temp_buf, size_t buf_len)
+{
+  if ((temp_buf[0] & 0xff) == 0) return; // empty
+  size_t utf16_len = ((temp_buf[0] & 0xff) - 2) / sizeof(uint16_t);
+  size_t utf8_len  = (size_t)_count_utf8_bytes(temp_buf + 1, utf16_len);
+  _convert_utf16le_to_utf8(temp_buf + 1, utf16_len, (uint8_t *)temp_buf, sizeof(uint16_t) * buf_len);
+  ((uint8_t *)temp_buf)[utf8_len] = '\0';
+
+  logPrintf("%s", (char *)temp_buf);
+}
+
+// Invoked when device with hid interface is mounted
+// Report descriptor is also available for use. tuh_hid_parse_report_descriptor()
+// can be used to parse common/simple enough descriptor.
+// Note: if report descriptor length > CFG_TUH_ENUMERATION_BUFSIZE, it will be skipped
+// therefore report_desc = NULL, desc_len = 0
+void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_report, uint16_t desc_len)
+{
+  logPrintf("HID device address = %d, instance = %d is mounted\r\n", dev_addr, instance);
+
+  // Interface protocol (hid_interface_protocol_enum_t)
+  const char   *protocol_str[] = {"None", "Keyboard", "Mouse"};
+  uint8_t const itf_protocol   = tuh_hid_interface_protocol(dev_addr, instance);
+
+  logPrintf("HID Interface Protocol = %s\r\n", protocol_str[itf_protocol]);
+
+  // By default, host stack will use boot protocol on supported interface.
+  // Therefore for this simple example, we only need to parse generic report descriptor (with built-in parser)
+  if (itf_protocol == HID_ITF_PROTOCOL_NONE)
+  {
+    hid_info[instance].report_count = tuh_hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
+    logPrintf("HID has %u reports \r\n", hid_info[instance].report_count);
+  }
+
+  // request to receive report
+  // tuh_hid_report_received_cb() will be invoked when report is available
+  if (!tuh_hid_receive_report(dev_addr, instance))
+  {
+    logPrintf("Error: cannot request to receive report\r\n");
+  }
+
+  if (itf_protocol == HID_ITF_PROTOCOL_KEYBOARD)
+  {
+    is_connected = true;
+  }
+}
+
+// Invoked when device with hid interface is un-mounted
+void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
+{
+  logPrintf("HID device address = %d, instance = %d is unmounted\r\n", dev_addr, instance);
+
+  is_connected = false;
+}
+
+// Invoked when received report from device via interrupt endpoint
+void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len)
+{
+  uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+
+  switch (itf_protocol)
+  {
+    case HID_ITF_PROTOCOL_KEYBOARD:
+      TU_LOG2("HID receive boot keyboard report\r\n");
+      process_kbd_report((hid_keyboard_report_t const *)report);
+      break;
+
+    default:
+      // Generic report requires matching ReportID and contents with previous parsed report info
+      process_generic_report(dev_addr, instance, report, len);
+      break;
+  }
+
+  // continue to request to receive report
+  if (!tuh_hid_receive_report(dev_addr, instance))
+  {
+    logPrintf("Error: cannot request to receive report\r\n");
+  }
+}
+
+//--------------------------------------------------------------------+
+// Keyboard
+//--------------------------------------------------------------------+
+
+// look up new key in previous keys
+static inline bool find_key_in_report(hid_keyboard_report_t const *report, uint8_t keycode)
+{
+  for (uint8_t i = 0; i < 6; i++)
+  {
+    if (report->keycode[i] == keycode)
+    {
+      return true;
     }
   }
-  return USBH_OK;
+  return false;
 }
 
-/**
-  * @brief  USBH_Get_HID_ReportDescriptor
-  *         Issue report Descriptor command to the device. Once the response
-  *         received, parse the report descriptor and update the status.
-  * @param  phost: Host handle
-  * @param  Length : HID Report Descriptor Length
-  * @retval USBH Status
-  */
-USBH_StatusTypeDef USBH_HID_GetHIDReportDescriptor(USBH_HandleTypeDef *phost,
-                                                   uint16_t length)
+static void process_kbd_report(hid_keyboard_report_t const *report)
 {
+  static hid_keyboard_report_t prev_report = {0, 0, {0}}; // previous report to check key released
 
-  USBH_StatusTypeDef status;
-
-  if (length > sizeof(phost->device.Data))
+  if (report_func_cb != NULL)
   {
-    USBH_ErrLog("Control error: Get HID Report Descriptor failed, data buffer size issue");
-    return USBH_NOT_SUPPORTED;
+    report_func_cb(report);
+  }
+  return;
+
+
+  //------------- example code ignore control (non-printable) key affects -------------//
+  for (uint8_t i = 0; i < 6; i++)
+  {
+    if (report->keycode[i])
+    {
+      if (find_key_in_report(&prev_report, report->keycode[i]))
+      {
+        // exist in previous report means the current key is holding
+      }
+      else
+      {
+        // not existed in previous report means the current key is pressed
+        bool const is_shift = report->modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT);
+        uint8_t    ch       = keycode2ascii[report->keycode[i]][is_shift ? 1 : 0];
+        putchar(ch);
+        if (ch == '\r')
+        {
+          putchar('\n');
+        }
+
+#ifndef __ICCARM__      // TODO IAR doesn't support stream control ?
+        fflush(stdout); // flush right away, else nanolib will wait for newline
+#endif
+      }
+    }
+    // TODO example skips key released
   }
 
-  status = USBH_GetDescriptor(phost,
-                              USB_REQ_RECIPIENT_INTERFACE | USB_REQ_TYPE_STANDARD,
-                              USB_DESC_HID_REPORT,
-                              phost->device.Data,
-                              length);
-
-  /* HID report descriptor is available in phost->device.Data.
-  In case of USB Boot Mode devices for In report handling ,
-  HID report descriptor parsing is not required.
-  In case, for supporting Non-Boot Protocol devices and output reports,
-  user may parse the report descriptor*/
-
-
-  return status;
+  prev_report = *report;
 }
 
-/**
-  * @brief  USBH_Get_HID_Descriptor
-  *         Issue HID Descriptor command to the device. Once the response
-  *         received, parse the report descriptor and update the status.
-  * @param  phost: Host handle
-  * @param  Length : HID Descriptor Length
-  * @retval USBH Status
-  */
-USBH_StatusTypeDef USBH_HID_GetHIDDescriptor(USBH_HandleTypeDef *phost,
-                                             uint16_t length)
+//--------------------------------------------------------------------+
+// Generic Report
+//--------------------------------------------------------------------+
+static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len)
 {
-  USBH_StatusTypeDef status;
+  (void)dev_addr;
+  (void)len;
 
-  if (length > sizeof(phost->device.Data))
+  uint8_t const          rpt_count    = hid_info[instance].report_count;
+  tuh_hid_report_info_t *rpt_info_arr = hid_info[instance].report_info;
+  tuh_hid_report_info_t *rpt_info     = NULL;
+
+  if (rpt_count == 1 && rpt_info_arr[0].report_id == 0)
   {
-    USBH_ErrLog("Control error: Get HID Descriptor failed, data buffer size issue");
-    return USBH_NOT_SUPPORTED;
-  }
-
-  status = USBH_GetDescriptor(phost,
-                              USB_REQ_RECIPIENT_INTERFACE | USB_REQ_TYPE_STANDARD,
-                              USB_DESC_HID,
-                              phost->device.Data,
-                              length);
-
-  return status;
-}
-
-/**
-  * @brief  USBH_Set_Idle
-  *         Set Idle State.
-  * @param  phost: Host handle
-  * @param  duration: Duration for HID Idle request
-  * @param  reportId : Targeted report ID for Set Idle request
-  * @retval USBH Status
-  */
-USBH_StatusTypeDef USBH_HID_SetIdle(USBH_HandleTypeDef *phost,
-                                    uint8_t duration,
-                                    uint8_t reportId)
-{
-
-  phost->Control.setup.b.bmRequestType = USB_H2D | USB_REQ_RECIPIENT_INTERFACE | \
-                                         USB_REQ_TYPE_CLASS;
-
-
-  phost->Control.setup.b.bRequest = USB_HID_SET_IDLE;
-  phost->Control.setup.b.wValue.w = (uint16_t)(((uint32_t)duration << 8U) | (uint32_t)reportId);
-
-  phost->Control.setup.b.wIndex.w = 0U;
-  phost->Control.setup.b.wLength.w = 0U;
-
-  return USBH_CtlReq(phost, NULL, 0U);
-}
-
-
-/**
-  * @brief  USBH_HID_Set_Report
-  *         Issues Set Report
-  * @param  phost: Host handle
-  * @param  reportType  : Report type to be sent
-  * @param  reportId    : Targeted report ID for Set Report request
-  * @param  reportBuff  : Report Buffer
-  * @param  reportLen   : Length of data report to be send
-  * @retval USBH Status
-  */
-USBH_StatusTypeDef USBH_HID_SetReport(USBH_HandleTypeDef *phost,
-                                      uint8_t reportType,
-                                      uint8_t reportId,
-                                      uint8_t *reportBuff,
-                                      uint8_t reportLen)
-{
-
-  phost->Control.setup.b.bmRequestType = USB_H2D | USB_REQ_RECIPIENT_INTERFACE | \
-                                         USB_REQ_TYPE_CLASS;
-
-
-  phost->Control.setup.b.bRequest = USB_HID_SET_REPORT;
-  phost->Control.setup.b.wValue.w = (uint16_t)(((uint32_t)reportType << 8U) | (uint32_t)reportId);
-
-  phost->Control.setup.b.wIndex.w = 0U;
-  phost->Control.setup.b.wLength.w = reportLen;
-
-  return USBH_CtlReq(phost, reportBuff, (uint16_t)reportLen);
-}
-
-
-/**
-  * @brief  USBH_HID_GetReport
-  *         retrieve Set Report
-  * @param  phost: Host handle
-  * @param  reportType  : Report type to be sent
-  * @param  reportId    : Targeted report ID for Set Report request
-  * @param  reportBuff  : Report Buffer
-  * @param  reportLen   : Length of data report to be send
-  * @retval USBH Status
-  */
-USBH_StatusTypeDef USBH_HID_GetReport(USBH_HandleTypeDef *phost,
-                                      uint8_t reportType,
-                                      uint8_t reportId,
-                                      uint8_t *reportBuff,
-                                      uint8_t reportLen)
-{
-
-  phost->Control.setup.b.bmRequestType = USB_D2H | USB_REQ_RECIPIENT_INTERFACE | \
-                                         USB_REQ_TYPE_CLASS;
-
-
-  phost->Control.setup.b.bRequest = USB_HID_GET_REPORT;
-  phost->Control.setup.b.wValue.w = (uint16_t)(((uint32_t)reportType << 8U) | (uint32_t)reportId);
-
-  phost->Control.setup.b.wIndex.w = 0U;
-  phost->Control.setup.b.wLength.w = reportLen;
-
-  return USBH_CtlReq(phost, reportBuff, (uint16_t)reportLen);
-}
-
-/**
-  * @brief  USBH_Set_Protocol
-  *         Set protocol State.
-  * @param  phost: Host handle
-  * @param  protocol : Set Protocol for HID : boot/report protocol
-  * @retval USBH Status
-  */
-USBH_StatusTypeDef USBH_HID_SetProtocol(USBH_HandleTypeDef *phost,
-                                        uint8_t protocol)
-{
-  phost->Control.setup.b.bmRequestType = USB_H2D | USB_REQ_RECIPIENT_INTERFACE
-                                         | USB_REQ_TYPE_CLASS;
-
-  phost->Control.setup.b.bRequest = USB_HID_SET_PROTOCOL;
-  if (protocol != 0U)
-  {
-    phost->Control.setup.b.wValue.w = 0U;
+    // Simple report without report ID as 1st byte
+    rpt_info = &rpt_info_arr[0];
   }
   else
   {
-    phost->Control.setup.b.wValue.w = 1U;
-  }
+    // Composite report, 1st byte is report ID, data starts from 2nd byte
+    uint8_t const rpt_id = report[0];
 
-  phost->Control.setup.b.wIndex.w = 0U;
-  phost->Control.setup.b.wLength.w = 0U;
-
-  return USBH_CtlReq(phost, NULL, 0U);
-
-}
-
-/**
-  * @brief  USBH_ParseHIDDesc
-  *         This function Parse the HID descriptor
-  * @param  desc: HID Descriptor
-  * @param  buf: Buffer where the source descriptor is available
-  * @retval None
-  */
-static void USBH_HID_ParseHIDDesc(HID_DescTypeDef *desc, uint8_t *buf)
-{
-  USBH_DescHeader_t *pdesc = (USBH_DescHeader_t *)buf;
-  uint16_t CfgDescLen;
-  uint16_t ptr;
-
-  CfgDescLen = LE16(buf + 2U);
-
-  if (CfgDescLen > USB_CONFIGURATION_DESC_SIZE)
-  {
-    ptr = USB_LEN_CFG_DESC;
-
-    while (ptr < CfgDescLen)
+    // Find report id in the array
+    for (uint8_t i = 0; i < rpt_count; i++)
     {
-      pdesc = USBH_GetNextDesc((uint8_t *)pdesc, &ptr);
-
-      if (pdesc->bDescriptorType == USB_DESC_TYPE_HID)
+      if (rpt_id == rpt_info_arr[i].report_id)
       {
-        desc->bLength = *(uint8_t *)((uint8_t *)pdesc + 0U);
-        desc->bDescriptorType = *(uint8_t *)((uint8_t *)pdesc + 1U);
-        desc->bcdHID = LE16((uint8_t *)pdesc + 2U);
-        desc->bCountryCode = *(uint8_t *)((uint8_t *)pdesc + 4U);
-        desc->bNumDescriptors = *(uint8_t *)((uint8_t *)pdesc + 5U);
-        desc->bReportDescriptorType = *(uint8_t *)((uint8_t *)pdesc + 6U);
-        desc->wItemLength = LE16((uint8_t *)pdesc + 7U);
+        rpt_info = &rpt_info_arr[i];
         break;
       }
     }
+
+    report++;
+    len--;
   }
-}
 
-/**
-  * @brief  USBH_HID_GetDeviceType
-  *         Return Device function.
-  * @param  phost: Host handle
-  * @retval HID function: HID_MOUSE / HID_KEYBOARD
-  */
-HID_TypeTypeDef USBH_HID_GetDeviceType(USBH_HandleTypeDef *phost)
-{
-  HID_TypeTypeDef   type = HID_UNKNOWN;
-  uint8_t InterfaceProtocol;
-
-  if (phost->gState == HOST_CLASS)
+  if (!rpt_info)
   {
-    InterfaceProtocol = phost->device.CfgDesc.Itf_Desc[phost->device.current_interface].bInterfaceProtocol;
-    if (InterfaceProtocol == HID_KEYBRD_BOOT_CODE)
+    logPrintf("Couldn't find report info !\r\n");
+    return;
+  }
+
+  // For complete list of Usage Page & Usage checkout src/class/hid/hid.h. For examples:
+  // - Keyboard                     : Desktop, Keyboard
+  // - Mouse                        : Desktop, Mouse
+  // - Gamepad                      : Desktop, Gamepad
+  // - Consumer Control (Media Key) : Consumer, Consumer Control
+  // - System Control (Power key)   : Desktop, System Control
+  // - Generic (vendor)             : 0xFFxx, xx
+  if (rpt_info->usage_page == HID_USAGE_PAGE_DESKTOP)
+  {
+    switch (rpt_info->usage)
     {
-      type = HID_KEYBOARD;
-    }
-    else
-    {
-      if (InterfaceProtocol == HID_MOUSE_BOOT_CODE)
-      {
-        type = HID_MOUSE;
-      }
-    }
-  }
-  return type;
-}
+      case HID_USAGE_DESKTOP_KEYBOARD:
+        TU_LOG2("HID receive keyboard report\r\n");
+        // Assume keyboard follow boot report layout
+        process_kbd_report((hid_keyboard_report_t const *)report);
+        break;
 
+      case HID_USAGE_DESKTOP_MOUSE:
+        TU_LOG2("HID receive mouse report\r\n");
+        // Assume mouse follow boot report layout
+        // process_mouse_report((hid_mouse_report_t const *)report);
+        break;
 
-/**
-  * @brief  USBH_HID_GetPollInterval
-  *         Return HID device poll time
-  * @param  phost: Host handle
-  * @retval poll time (ms)
-  */
-uint8_t USBH_HID_GetPollInterval(USBH_HandleTypeDef *phost)
-{
-  HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *) phost->pActiveClass->pData;
-
-  if ((phost->gState == HOST_CLASS_REQUEST) ||
-      (phost->gState == HOST_INPUT) ||
-      (phost->gState == HOST_SET_CONFIGURATION) ||
-      (phost->gState == HOST_CHECK_CLASS) ||
-      ((phost->gState == HOST_CLASS)))
-  {
-    return (uint8_t)(HID_Handle->poll);
-  }
-  else
-  {
-    return 0U;
-  }
-}
-/**
-  * @brief  USBH_HID_FifoInit
-  *         Initialize FIFO.
-  * @param  f: Fifo address
-  * @param  buf: Fifo buffer
-  * @param  size: Fifo Size
-  * @retval none
-  */
-void USBH_HID_FifoInit(FIFO_TypeDef *f, uint8_t *buf, uint16_t size)
-{
-  f->head = 0U;
-  f->tail = 0U;
-  f->lock = 0U;
-  f->size = size;
-  f->buf = buf;
-}
-
-/**
-  * @brief  USBH_HID_FifoRead
-  *         Read from FIFO.
-  * @param  f: Fifo address
-  * @param  buf: read buffer
-  * @param  nbytes: number of item to read
-  * @retval number of read items
-  */
-uint16_t USBH_HID_FifoRead(FIFO_TypeDef *f, void *buf, uint16_t nbytes)
-{
-  uint16_t i;
-  uint8_t *p;
-
-  p = (uint8_t *) buf;
-
-  if (f->lock == 0U)
-  {
-    f->lock = 1U;
-
-    for (i = 0U; i < nbytes; i++)
-    {
-      if (f->tail != f->head)
-      {
-        *p++ = f->buf[f->tail];
-        f->tail++;
-
-        if (f->tail == f->size)
+      default:
+        logPrintf("report[%u] ", rpt_info->report_id);
+        for (uint8_t i = 0; i < len; i++)
         {
-          f->tail = 0U;
+          logPrintf("%02X ", report[i]);
         }
-      }
-      else
-      {
-        f->lock = 0U;
-        return i;
-      }
+        logPrintf("\r\n");
+        break;
     }
   }
-
-  f->lock = 0U;
-
-  return nbytes;
 }
-
-/**
-  * @brief  USBH_HID_FifoWrite
-  *         Write To FIFO.
-  * @param  f: Fifo address
-  * @param  buf: read buffer
-  * @param  nbytes: number of item to write
-  * @retval number of written items
-  */
-uint16_t USBH_HID_FifoWrite(FIFO_TypeDef *f, void *buf, uint16_t  nbytes)
-{
-  uint16_t i;
-  uint8_t *p;
-
-  p = (uint8_t *) buf;
-
-  if (f->lock == 0U)
-  {
-    f->lock = 1U;
-
-    for (i = 0U; i < nbytes; i++)
-    {
-      if (((f->head + 1U) == f->tail) ||
-          (((f->head + 1U) == f->size) && (f->tail == 0U)))
-      {
-        f->lock = 0U;
-        return i;
-      }
-      else
-      {
-        f->buf[f->head] = *p++;
-        f->head++;
-
-        if (f->head == f->size)
-        {
-          f->head = 0U;
-        }
-      }
-    }
-  }
-
-  f->lock = 0U;
-
-  return nbytes;
-}
-
-extern uint32_t key_pre_time;
-extern uint32_t key_exe_time;
-
-/**
-  * @brief  The function is a callback about HID Data events
-  *  @param  phost: Selected device
-  * @retval None
-  */
-__weak void USBH_HID_EventCallback(USBH_HandleTypeDef *phost)
-{
-  /* Prevent unused argument(s) compilation warning */
-  UNUSED(phost);
-
-  key_exe_time = micros() - key_pre_time;
-
-  // logPrintf("key time   : %d us, %d.%d ms\n", key_exe_time, key_exe_time/1000, key_exe_time%1000);
-
-  // logPrintf("USBH_HID_EventCallback() \n");
-}
-
-
 
 #ifdef _USE_HW_CLI
 void cliCmd(cli_args_t *args)
@@ -863,33 +423,33 @@ void cliCmd(cli_args_t *args)
 
   if (args->argc == 1 && args->isStr(0, "info") == true)
   { 
-    cliPrintf("speed          : %d\n", p_host->device.speed);
-    cliPrintf("state          : %d\n", p_hid->state);
-    cliPrintf("ctl_state      : %d\n", p_hid->ctl_state);
-    cliPrintf("ep_addr        : 0x%02X\n", p_hid->ep_addr);
-    cliPrintf("wMaxPacketSize : %d\n", p_hid->length);
-    cliPrintf("poll           : %d\n", p_hid->poll);
+    // cliPrintf("speed          : %d\n", p_host->device.speed);
+    // cliPrintf("state          : %d\n", p_hid->state);
+    // cliPrintf("ctl_state      : %d\n", p_hid->ctl_state);
+    // cliPrintf("ep_addr        : 0x%02X\n", p_hid->ep_addr);
+    // cliPrintf("wMaxPacketSize : %d\n", p_hid->length);
+    // cliPrintf("poll           : %d\n", p_hid->poll);
     ret = true;
   }
 
   if (args->argc == 1 && args->isStr(0, "log") == true)
   {
-    uint32_t pre_time;
-    uint32_t pre_cnt;
+    // uint32_t pre_time;
+    // uint32_t pre_cnt;
 
-    pre_cnt = p_host->Timer;
-    pre_time = millis();
-    while(cliKeepLoop())
-    {
-      if (millis()-pre_time >= 1000)
-      {
-        pre_time = millis();
-        cliPrintf("sof cnt : %d/sec\n", p_host->Timer - pre_cnt);
+    // pre_cnt = p_host->Timer;
+    // pre_time = millis();
+    // while(cliKeepLoop())
+    // {
+    //   if (millis()-pre_time >= 1000)
+    //   {
+    //     pre_time = millis();
+    //     cliPrintf("sof cnt : %d/sec\n", p_host->Timer - pre_cnt);
 
-        pre_cnt = p_host->Timer;
-      }
-    }
-    ret = true;
+    //     pre_cnt = p_host->Timer;
+    //   }
+    // }
+    // ret = true;
   }
 
   if (ret == false)

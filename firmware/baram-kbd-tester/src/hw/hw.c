@@ -38,9 +38,13 @@ bool hwInit(void)
   resetInit();
   gpioInit();
   buttonInit();
+  i2cInit();
 
   usbhInit();
   usbhBegin();
 
+  lcdInit();
+  lcdSetFps(20);
+    
   return true;
 }

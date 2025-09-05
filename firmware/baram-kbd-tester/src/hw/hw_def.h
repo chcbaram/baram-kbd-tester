@@ -6,11 +6,13 @@
 #include "bsp.h"
 
 
-#define _DEF_FIRMWATRE_VERSION    "V240612R1"
+#define _DEF_FIRMWATRE_VERSION    "V250906R1"
 #define _DEF_BOARD_NAME           "BARAM-KBD-TESTER"
 
 
 #define _USE_HW_MICROS
+#define _USE_HW_USBH
+
 
 #define _USE_HW_LED
 #define      HW_LED_MAX_CH          1
@@ -49,10 +51,13 @@
 #define _USE_HW_RESET
 #define      HW_RESET_BOOT          1
 
+#define _USE_HW_I2C
+#define      HW_I2C_MAX_CH          1
 
-
-#define _USE_HW_USBH
-
+#define _USE_HW_LCD
+#define _USE_HW_SSD1306
+#define      HW_LCD_WIDTH           128
+#define      HW_LCD_HEIGHT          32
 
 
 //-- CLI
@@ -61,6 +66,7 @@
 #define _USE_CLI_HW_KEYSCAN         1
 #define _USE_CLI_HW_GPIO            1
 #define _USE_CLI_HW_RESET           1
+#define _USE_CLI_HW_I2C             1
 
 
 typedef enum
