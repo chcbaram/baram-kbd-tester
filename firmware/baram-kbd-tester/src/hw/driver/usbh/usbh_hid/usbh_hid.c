@@ -135,6 +135,8 @@ void tuh_mount_cb(uint8_t daddr)
   logPrintf("\r\n");
 
   logPrintf("  bNumConfigurations  %u\r\n", desc.device.bNumConfigurations);
+
+  usbh_hid_info.is_high_speed = (tuh_speed_get(daddr) == TUSB_SPEED_HIGH);
 }
 
 // Invoked when device is unmounted (bus reset/unplugged)
@@ -422,13 +424,9 @@ void cliCmd(cli_args_t *args)
   bool ret = false;
 
   if (args->argc == 1 && args->isStr(0, "info") == true)
-  { 
-    // cliPrintf("speed          : %d\n", p_host->device.speed);
-    // cliPrintf("state          : %d\n", p_hid->state);
-    // cliPrintf("ctl_state      : %d\n", p_hid->ctl_state);
-    // cliPrintf("ep_addr        : 0x%02X\n", p_hid->ep_addr);
-    // cliPrintf("wMaxPacketSize : %d\n", p_hid->length);
-    // cliPrintf("poll           : %d\n", p_hid->poll);
+  {
+    cliPrintf("connected : %s\n", is_connected ? "yes" : "no");
+    cliPrintf("speed     : %s\n", usbh_hid_info.is_high_speed ? "High" : "Full/Low");
     ret = true;
   }
 

@@ -19,6 +19,7 @@ bool usbhInit(void);
 void usbhDeInit(void);
 bool usbhBegin(void);
 bool usbhUpdate(void);
+uint32_t usbhGetRxCycle(void);
 
 #endif
 

@@ -32,6 +32,9 @@ bool microsInit(void)
   HAL_TIM_Base_Init(&TimHandle);
   HAL_TIM_Base_Start(&TimHandle);
 
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
   return true;
 }
@@ -39,6 +42,16 @@ bool microsInit(void)
 uint32_t micros(void)
 {
   return TimHandle.Instance->CNT;
+}
+
+uint32_t cycles(void)
+{
+  return DWT->CYCCNT;
+}
+
+uint32_t cyclesToMicros(uint32_t cyc)
+{
+  return cyc / (SystemCoreClock / 1000000);
 }
 
 #endif

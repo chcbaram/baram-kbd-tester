@@ -13,6 +13,8 @@ extern "C" {
 
 bool microsInit(void);
 uint32_t micros(void);
+uint32_t cycles(void);
+uint32_t cyclesToMicros(uint32_t cyc);
 
 
 #endif

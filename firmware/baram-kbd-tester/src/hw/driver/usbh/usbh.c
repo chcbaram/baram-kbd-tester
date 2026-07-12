@@ -3,10 +3,13 @@
 
 #ifdef _USE_HW_USBH
 #include "cli.h"
+#include "micros.h"
 
 #ifdef _USE_HW_CLI
 static void cliCmd(cli_args_t *args);
 #endif
+
+static volatile uint32_t usbh_rx_cycle = 0;
 
 
 
@@ -138,9 +141,8 @@ bool usbhInit(void)
   /* Enable USB PHY pulldown resistors */
   USB_OTG_HS->GCCFG |= USB_OTG_GCCFG_PULLDOWNEN;
 
-  // /* USB_OTG_HS interrupt Init */
   HAL_NVIC_SetPriority(OTG_HS_IRQn, 0, 0);
-  // HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
+  HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
 #endif
 
   // init host stack on configured roothub port
@@ -213,7 +215,16 @@ size_t usbGetSerial(uint16_t desc_str1[], size_t max_chars)
   return 2 * uid_len;
 }
 
+uint32_t usbhGetRxCycle(void)
+{
+  return usbh_rx_cycle;
+}
+
 void OTG_HS_IRQHandler(void) {
+  if (USB_OTG_HS->GINTSTS & (USB_OTG_GINTSTS_HCINT | USB_OTG_GINTSTS_RXFLVL))
+  {
+    usbh_rx_cycle = cycles();
+  }
   tuh_int_handler(0);
 }
 

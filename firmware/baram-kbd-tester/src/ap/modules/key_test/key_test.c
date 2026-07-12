@@ -24,7 +24,7 @@ static void keyTestRun(void);
 static void keyTestReportCB(hid_keyboard_report_t const *report);
 
 volatile bool     key_is_received;
-volatile uint32_t key_pre_time;
+volatile uint32_t key_pre_cycle;
 volatile uint32_t key_exe_time;
 
 static uint16_t key_time_log_count = 0;
@@ -264,7 +264,10 @@ void keyTestRun(void)
 
 void keyTestReportCB(hid_keyboard_report_t const *report)
 {
-  key_exe_time = micros() - key_pre_time;
+  if (key_is_received)
+    return;
+
+  key_exe_time = cyclesToMicros(usbhGetRxCycle() - key_pre_cycle);
   key_is_received = true;
 }
 
@@ -273,11 +276,14 @@ bool keyTestReq(key_test_info_t *test_info, uint32_t press_time_ms)
   uint32_t pre_time;
   bool ret = true;
 
-  key_is_received = false;  
-  gpioPinWrite(KEY_PRESS_A, _DEF_HIGH);
-  key_pre_time = micros();
+  if (!usbhHidIsConnected())
+    return false;
 
-  pre_time = millis();  
+  key_is_received = false;
+  gpioPinWrite(KEY_PRESS_A, _DEF_HIGH);
+  key_pre_cycle = cycles();
+
+  pre_time = millis();
   while(millis()-pre_time <= press_time_ms)
   {
     usbhUpdate();
@@ -288,9 +294,9 @@ bool keyTestReq(key_test_info_t *test_info, uint32_t press_time_ms)
     ret = false;
 
 
-  key_is_received = false;  
+  key_is_received = false;
   gpioPinWrite(KEY_PRESS_A, _DEF_LOW);
-  key_pre_time = micros();
+  key_pre_cycle = cycles();
 
   pre_time = millis();
   while(millis()-pre_time <= press_time_ms)

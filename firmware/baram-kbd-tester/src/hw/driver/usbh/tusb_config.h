@@ -37,7 +37,7 @@
 
 #define CFG_TUSB_OS           OPT_OS_NONE
 #define CFG_TUSB_MCU          OPT_MCU_STM32U5
-#define CFG_TUSB_DEBUG        1
+#define CFG_TUSB_DEBUG        0
 #define CFG_TUD_DWC2_DMA_ENABLE 1
 
 /* USB DMA on some MCUs can only access a specific SRAM region with restriction on alignment.
